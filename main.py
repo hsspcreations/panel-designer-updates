@@ -1,3 +1,5 @@
+__version__ = "2025.08.10"
+
 import tkinter as tk
 from tkinter import simpledialog, filedialog, messagebox, ttk
 import json
@@ -21,10 +23,15 @@ os.makedirs(PANELS_FOLDER, exist_ok=True)
 TOKEN_FILE = "token.json"
 
 
+
 def update_software():
+    import time
+    messagebox.showinfo("Updater", f"Current version: {__version__}
+Downloading latest version...")
     UPDATE_URL = "https://raw.githubusercontent.com/hsspcreations/panel-designer-updates/refs/heads/main/main.py"
     try:
-        response = requests.get(UPDATE_URL, stream=True)
+        url = f"{UPDATE_URL}?t={int(time.time())}"  # bypass cache
+        response = requests.get(url, stream=True)
         if response.status_code == 200:
             backup_path = "main_backup.py"
             shutil.copy("main.py", backup_path)  # backup old version
@@ -33,6 +40,11 @@ def update_software():
             messagebox.showinfo("Update Complete", "Software updated successfully. Restarting now...")
             import sys, os
             os.execl(sys.executable, sys.executable, *sys.argv)  # restart app
+        else:
+            messagebox.showerror("Update Failed", "Could not download the update.")
+    except Exception as e:
+        messagebox.showerror("Error", f"Update failed: {e}")
+
         else:
             messagebox.showerror("Update Failed", "Could not download the update.")
     except Exception as e:
