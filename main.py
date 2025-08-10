@@ -2,7 +2,7 @@ import tkinter as tk
 from tkinter import simpledialog, filedialog, messagebox, ttk
 import json
 import pandas as pd
-import numpy as np # <-- Added import for numpy
+import numpy as np
 import os
 import sys
 import gspread
@@ -94,6 +94,7 @@ class PanelDesigner:
         tk.Button(top_frame, text="Add Cubicle", command=self.add_cubicle).pack(side=tk.LEFT, padx=5)
         tk.Button(top_frame, text="Add Vertical Busbar", command=self.add_vertical_busbar_form).pack(side=tk.LEFT, padx=5)
         tk.Button(top_frame, text="Add Horizontal Busbar", command=self.add_horizontal_busbar_form).pack(side=tk.LEFT, padx=5)
+        tk.Button(top_frame, text="Add Busbar Terminal", command=self.add_busbar_terminal_form).pack(side=tk.LEFT, padx=5)
         tk.Button(top_frame, text="Upload Breaker Types", command=self.load_breaker_excel).pack(side=tk.LEFT, padx=5)
         tk.Button(top_frame, text="Save Panel", command=self.save_panel).pack(side=tk.LEFT, padx=5)
         tk.Button(top_frame, text="Generate BOM", command=self.generate_bom).pack(side=tk.LEFT, padx=5)
@@ -228,10 +229,9 @@ class PanelDesigner:
                 x, y = 50, 50
             else:
                 last = self.cubicles[-1]
-                x = last["x"] + last["width"] * SCALE  # No gap between cubicles
+                x = last["x"] + last["width"] * SCALE
                 y = last["y"]
 
-            # Use a fixed color
             rect = self.canvas.create_rectangle(x, y, x + w, y + h, fill="lightblue", outline="black", width=3)
 
             cubicle_data = { "id": rect, "width": width, "height": height, "x": x, "y": y, "compartments": [] }
@@ -250,11 +250,9 @@ class PanelDesigner:
             messagebox.showwarning("Delete Cubicle", "No cubicles to delete.")
             return
 
-        # Select the last added cubicle to delete for simplicity
         cubicle = self.cubicles.pop()
         self.canvas.delete(cubicle["id"])
 
-        # Delete all compartments and their sections
         for comp in cubicle["compartments"]:
             for sec in comp["sections"]:
                 self.canvas.delete(sec["id"])
@@ -352,6 +350,73 @@ class PanelDesigner:
         if self.tooltip:
             self.tooltip.hide()
 
+    
+    def add_busbar_terminal_form(self):
+        form = tk.Toplevel(self.root)
+        form.title("Add Busbar Terminal")
+
+        tk.Label(form, text="Busbar Size:").grid(row=0, column=0, padx=5, pady=5)
+        busbar_sizes = [
+            "20x6 Busbar (5.5m Length) LVT",
+            "25x10 Busbar (5.5m Length) LVT",
+            "32x10 Cu Busbar (5.5m Length) LVT",
+            "40x10 Cu Busbar (5.5m Length) LVT",
+            "50x10 Cu Busbar (5.5m Length) LVT",
+            "63x10 Cu Busbar (5.5m Length) LVT",
+            "75x10 Cu Busbar (5.5m Length) LVT",
+            "80x10 Cu Busbar (5.5m Length) LVT",
+            "100x10 Cu Busbar (5.5m Length) LVT"
+        ]
+        size_var = tk.StringVar(value=busbar_sizes[0])
+        ttk.Combobox(form, textvariable=size_var, values=busbar_sizes, state="readonly").grid(row=0, column=1, padx=5, pady=5)
+
+        tk.Label(form, text="No. of Runs:").grid(row=1, column=0, padx=5, pady=5)
+        runs_var = tk.IntVar(value=1)
+        ttk.Combobox(form, textvariable=runs_var, values=[1, 2, 3], state="readonly").grid(row=1, column=1, padx=5, pady=5)
+
+        tk.Label(form, text="Phase:").grid(row=2, column=0, padx=5, pady=5)
+        phase_var = tk.StringVar(value="Single Phase")
+        ttk.Combobox(form, textvariable=phase_var, values=["Single Phase", "Three Phase"], state="readonly").grid(row=2, column=1, padx=5, pady=5)
+
+        tk.Label(form, text="Type:").grid(row=3, column=0, padx=5, pady=5)
+        type_var = tk.StringVar(value="Horizontal")
+        ttk.Combobox(form, textvariable=type_var, values=["Horizontal", "Vertical"], state="readonly").grid(row=3, column=1, padx=5, pady=5)
+
+        def submit():
+            self.spawn_busbar_terminal(size_var.get(), runs_var.get(), phase_var.get(), type_var.get())
+            form.destroy()
+
+        tk.Button(form, text="Add", command=submit).grid(row=4, column=0, columnspan=2, pady=10)
+        form.grab_set()
+        form.wait_window()
+
+    def spawn_busbar_terminal(self, busbar_size, no_of_runs, phase, busbar_type):
+        if busbar_type.lower() == "horizontal":
+            x1, x2 = 50, 250
+            y = 150
+            line_id = self.canvas.create_line(x1, y, x2, y, fill="purple", width=4)
+            coords = [x1, y, x2, y]
+        else:
+            x = 200
+            y1, y2 = 50, 300
+            line_id = self.canvas.create_line(x, y1, x, y2, fill="purple", width=4)
+            coords = [x, y1, x, y2]
+
+        busbar_data = {
+            "id": line_id,
+            "type": busbar_type.lower(),
+            "coords": coords,
+            "amperage": None,
+            "current_density": None,
+            "phase": phase,
+            "busbar_size": busbar_size,
+            "no_of_runs": no_of_runs
+        }
+        self.busbars.append(busbar_data)
+        self.undo_stack.append({"type": "add_busbar", "busbar": busbar_data})
+        self.make_busbar_draggable(line_id, busbar_type.lower())
+        self.make_busbar_resizable(line_id, busbar_type.lower())
+
     def add_vertical_busbar_form(self):
         form = tk.Toplevel(self.root)
         form.title("Add Vertical Busbar")
@@ -367,7 +432,6 @@ class PanelDesigner:
         tk.Label(form, text="Phase:").grid(row=2, column=0, padx=5, pady=5)
         phase_var = tk.StringVar(value="Single Phase")
         ttk.Combobox(form, textvariable=phase_var, values=["Single Phase", "Three Phase"], state="readonly").grid(row=2, column=1, padx=5, pady=5)
-
 
         def submit():
             self.spawn_vertical_busbar(amp_var.get(), cd_var.get(), phase_var.get())
@@ -410,7 +474,6 @@ class PanelDesigner:
         tk.Label(form, text="Phase:").grid(row=2, column=0, padx=5, pady=5)
         phase_var = tk.StringVar(value="Single Phase")
         ttk.Combobox(form, textvariable=phase_var, values=["Single Phase", "Three Phase"], state="readonly").grid(row=2, column=1, padx=5, pady=5)
-
 
         def submit():
             self.spawn_horizontal_busbar(amp_var.get(), cd_var.get(), phase_var.get())
@@ -528,10 +591,8 @@ class PanelDesigner:
             self.cubicles.append(cubicle_data)
             self.undo_stack.append({"type": "add_cubicle", "cubicle": cubicle_data})
 
-            # Create compartments
             self.create_compartments(cubicle_data, len(cub["compartments"]))
 
-            # Restore breakers
             for comp_idx, saved_comp in enumerate(cub["compartments"]):
                 for sec_idx, saved_sec in enumerate(saved_comp["sections"]):
                     item = saved_sec.get("item")
@@ -546,7 +607,6 @@ class PanelDesigner:
                         self.canvas.tag_bind(text_id, "<Leave>", lambda e: self.hide_tooltip())
                         section["item"] = item
 
-        # Restore busbars
         for busbar in panel_data.get("busbars", []):
             line = self.canvas.create_line(*busbar["coords"], fill="orange", width=3)
             self.canvas.tag_raise(line)
@@ -556,6 +616,7 @@ class PanelDesigner:
             self.make_busbar_resizable(line, busbar["type"])
 
         self.add_bottom_right_info()
+
     def save_panel(self):
         if not self.panel_name:
             messagebox.showwarning("No Panel", "Please create or select a panel first.")
@@ -611,17 +672,14 @@ class PanelDesigner:
         except Exception as e:
             messagebox.showerror("Error", f"Failed to load Excel: {e}")
 
-    # Corrected generate_bom method
     def generate_bom(self):
         if not self.cubicles:
             messagebox.showwarning("Generate BOM", "Please add cubicles and components first.")
             return
 
-        # Initialize the Google Sheets client and spreadsheet variable.
-        # This prevents the NameError from occurring.
         creds = get_credentials()
         client = gspread.authorize(creds)
-        spreadsheet = None  # Ensure spreadsheet is always defined.
+        spreadsheet = None
 
         spreadsheet_name = f"{self.customer}_{self.project}_{self.ref}"
         try:
@@ -629,7 +687,6 @@ class PanelDesigner:
         except gspread.SpreadsheetNotFound:
             spreadsheet = client.create(spreadsheet_name)
 
-        # --- 1. Current Panel BOM ---
         sheet_title = self.panel_name
         try:
             ws = spreadsheet.worksheet(sheet_title)
@@ -647,22 +704,21 @@ class PanelDesigner:
 
         data.append([])
         data.append(["Busbars"])
-        data.append(["Type", "Amperage (A)", "Current Density (A/mm²)", "Coordinates (x1, y1, x2, y2)", "Phase", "Busbar Length (mm)"])
+        data.append(["Type", "Amperage (A)", "Current Density (A/mm²)", "Coordinates (x1, y1, x2, y2)", "Phase", "Busbar Size", "No. of Runs", "Busbar Length (mm)"])
         for bus in self.busbars:
             coords = tuple(map(int, bus["coords"]))
             length = (coords[2] - coords[0]) if bus["type"] == "horizontal" else (coords[3] - coords[1])
-            data.append([bus["type"], bus["amperage"], bus["current_density"], str(coords), bus["phase"], length])
+            data.append([bus.get("type"), bus.get("amperage"), bus.get("current_density"), str(coords), bus.get("phase"), bus.get("busbar_size", ""), bus.get("no_of_runs", ""), length])
         
-        # Fixed: Use named arguments for the update() method
         ws.update(values=data, range_name="A1")
 
-        # --- 2. Total BOM Aggregation ---
-        
         part_totals = defaultdict(lambda: {"desc": "", "total": 0, "panels": defaultdict(int)})
-        busbar_totals = defaultdict(lambda: {"total": 0, "panels": defaultdict(int), "desc": "", "no_of_runs": 0})
+        busbar_totals = defaultdict(lambda: {"total": 0, "panels": defaultdict(int), "desc": ""})
         
         panel_files = [f for f in os.listdir(PANELS_FOLDER) if f.endswith(".json")]
         relevant_panels = []
+        no_match_counter = 0
+
         for fname in panel_files:
             fpath = os.path.join(PANELS_FOLDER, fname)
             with open(fpath, "r") as f:
@@ -672,7 +728,6 @@ class PanelDesigner:
                     pname = fname[:-5]
                     relevant_panels.append(pname)
                     
-                    # Aggregate breakers
                     for cub in panel_data.get("cubicles", []):
                         for comp in cub.get("compartments", []):
                             for sec in comp.get("sections", []):
@@ -684,22 +739,26 @@ class PanelDesigner:
                                     part_totals[model]["total"] += 1
                                     part_totals[model]["panels"][pname] += 1
                     
-                    # Aggregate busbars
                     for busbar in panel_data.get("busbars", []):
                         amp = busbar["amperage"]
                         cd = busbar["current_density"]
                         coords = busbar["coords"]
                         phase = busbar["phase"]
-                        
-                        # Calculate busbar length
+                        busbar_size_str = busbar.get("busbar_size", "")
+                        no_of_runs = busbar.get("no_of_runs", 1)
+
                         length = (coords[2] - coords[0]) if busbar["type"] == "horizontal" else (coords[3] - coords[1])
                         
-                        if cd > 0 and amp > 0:
-                            # Step 1: Area needed
-                            area_needed = amp / cd
-                            print(f"📏 Area needed: {amp} ÷ {cd} = {area_needed}")
+                        if busbar_size_str:
+                            bus_part_no = busbar_size_str
+                            bus_desc = busbar_size_str
+                            qty = length * no_of_runs
+                            busbar_totals[bus_part_no]["desc"] = bus_desc
+                            busbar_totals[bus_part_no]["total"] += qty
+                            busbar_totals[bus_part_no]["panels"][pname] += qty
 
-                            # Step 2: Nearest highest busbar
+                        elif cd is not None and amp is not None and cd > 0 and amp > 0:
+                            area_needed = amp / cd
                             nearest_busbar = self.find_nearest_highest_busbar(area_needed)
                             
                             if nearest_busbar is None:
@@ -711,22 +770,15 @@ class PanelDesigner:
                                 bus_part_no = nearest_busbar["Part no"]
                                 bus_desc = nearest_busbar["Item description"]
                                 bus_runs = nearest_busbar["No. of runs"]
-                                print(f"🔍 Match: {bus_part_no}, Area={nearest_busbar['Area (sqmm)']}, Runs={bus_runs}")
-
-                                # Step 3: Base qty = length × runs
                                 base_qty = length * bus_runs
-                                print(f"📐 Base qty: {length} × {bus_runs} → {base_qty}")
-
-                                # Step 4: Apply phase multiplier
                                 multiplier = 2 if phase == "Single Phase" else 4
                                 qty = base_qty * multiplier
-                                print(f"✅ Final qty: {base_qty} × {multiplier} → {qty}")
-
+                            
                             busbar_totals[bus_part_no]["desc"] = bus_desc
                             busbar_totals[bus_part_no]["total"] += qty
                             busbar_totals[bus_part_no]["panels"][pname] += qty
 
-        # Create or update "Total BOM" sheet
+
         try:
             total_ws = spreadsheet.worksheet("Total BOM")
         except gspread.WorksheetNotFound:
@@ -735,14 +787,12 @@ class PanelDesigner:
         header = ["Part No.", "Description", "Total Qty"] + relevant_panels
         total_data = [header]
         
-        # Add breaker totals
         for model, info in part_totals.items():
             row = [model, info["desc"], info["total"]]
             for pname in relevant_panels:
                 row.append(info["panels"].get(pname, 0))
             total_data.append(row)
         
-        # Add a separator and busbar totals
         total_data.append([])
         total_data.append(["Busbar Materials"])
         total_data.append(header)
@@ -752,7 +802,6 @@ class PanelDesigner:
                 row.append(info["panels"].get(pname, 0))
             total_data.append(row)
 
-        # Fixed: Convert numpy types to native Python types
         serializable_data = []
         for row in total_data:
             new_row = []
@@ -765,10 +814,8 @@ class PanelDesigner:
 
         total_ws.clear()
         
-        # Fixed: Use named arguments for the update() method
         total_ws.update(values=serializable_data, range_name="A1")
 
-        # Gray header formatting
         header_format = {
             "backgroundColor": {
                 "red": 0.8,
@@ -787,25 +834,14 @@ class PanelDesigner:
     
     def find_nearest_highest_busbar(self, area_value):
         if self.busbar_data.empty:
-            print("❌ Busbar data is empty!")
             return None
 
-        # Filter to nearest highest or equal
         filtered = self.busbar_data[self.busbar_data['Area (sqmm)'] >= area_value]
         if filtered.empty:
-            print(f"⚠️ No match found for required area {area_value}")
             return None
         
         match_row = filtered.loc[filtered['Area (sqmm)'].idxmin()]
-        print(f"🔍 Match for target {area_value}: {match_row['Part no']} | {match_row['Item description']} | Area={match_row['Area (sqmm)']} | Runs={match_row['No. of runs']}")
         return match_row
-        
-        filtered_data = self.busbar_data[self.busbar_data['Area (sqmm)'] >= area_value]
-        if filtered_data.empty:
-            return pd.Series()
-        
-        return filtered_data.loc[filtered_data['Area (sqmm)'].idxmin()]
-
 
     def undo_last_action(self):
         if not self.undo_stack:
@@ -927,25 +963,3 @@ if __name__ == "__main__":
     root = tk.Tk()
     app = PanelDesigner(root, project_info["customer"], project_info["project"], project_info["ref"])
     root.mainloop()
-
-    def undo_last_action(self):
-        if not self.undo_stack:
-            messagebox.showinfo("Undo", "Nothing to undo.")
-            return
-
-        action = self.undo_stack.pop()
-        if action["type"] == "add_cubicle":
-            self.canvas.delete(action["cubicle"]["id"])
-            for comp in action["cubicle"]["compartments"]:
-                for sec in comp["sections"]:
-                    self.canvas.delete(sec["id"])
-            self.cubicles.remove(action["cubicle"])
-        elif action["type"] == "add_busbar":
-            self.canvas.delete(action["busbar"]["id"])
-            self.busbars.remove(action["busbar"])
-        elif action["type"] == "select_component":
-            section = action["section"]
-            section["item"] = action["previous_item"]
-            self.canvas.delete(action["text_id"])
-            self.canvas.itemconfig(action["rect_id"], fill="white" if not action["previous_item"] else "lightgreen")
-        messagebox.showinfo("Undo", "Last action undone.")
