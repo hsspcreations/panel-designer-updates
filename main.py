@@ -1,6 +1,8 @@
 import tkinter as tk
 from tkinter import simpledialog, filedialog, messagebox, ttk
 import json
+import requests
+import shutil
 import pandas as pd
 import numpy as np
 import os
@@ -18,6 +20,23 @@ PANELS_FOLDER = os.path.join(APPDATA_FOLDER, "panels")
 os.makedirs(PANELS_FOLDER, exist_ok=True)
 TOKEN_FILE = "token.json"
 
+
+def update_software():
+    UPDATE_URL = "https://raw.githubusercontent.com/hsspcreations/panel-designer-updates/refs/heads/main/main.py"
+    try:
+        response = requests.get(UPDATE_URL, stream=True)
+        if response.status_code == 200:
+            backup_path = "main_backup.py"
+            shutil.copy("main.py", backup_path)  # backup old version
+            with open("main.py", "wb") as f:
+                f.write(response.content)
+            messagebox.showinfo("Update Complete", "Software updated successfully. Restarting now...")
+            import sys, os
+            os.execl(sys.executable, sys.executable, *sys.argv)  # restart app
+        else:
+            messagebox.showerror("Update Failed", "Could not download the update.")
+    except Exception as e:
+        messagebox.showerror("Error", f"Update failed: {e}")
 def resource_path(relative_path):
     """Get absolute path to resource, works for dev and PyInstaller"""
     if hasattr(sys, "_MEIPASS"):
@@ -99,6 +118,7 @@ class PanelDesigner:
         tk.Button(top_frame, text="Save Panel", command=self.save_panel).pack(side=tk.LEFT, padx=5)
         tk.Button(top_frame, text="Generate BOM", command=self.generate_bom).pack(side=tk.LEFT, padx=5)
         tk.Button(top_frame, text="Undo", command=self.undo_last_action).pack(side=tk.LEFT, padx=5)
+        tk.Button(top_frame, text="Update Software", command=update_software).pack(side=tk.LEFT, padx=5)
 
         canvas_frame = tk.Frame(root)
         canvas_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
