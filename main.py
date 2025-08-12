@@ -10,6 +10,7 @@ import numpy as np
 import os
 import sys
 import gspread
+from gspread_formatting import format_cell_range, CellFormat, Color, TextFormat
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request
@@ -26,8 +27,7 @@ TOKEN_FILE = "token.json"
 
 def update_software():
     import time
-    messagebox.showinfo("Updater", f"Current version: {__version__}
-Downloading latest version...")
+    messagebox.showinfo("Updater", f"Current version: {__version__}\nDownloading latest version...")
     UPDATE_URL = "https://raw.githubusercontent.com/hsspcreations/panel-designer-updates/refs/heads/main/main.py"
     try:
         url = f"{UPDATE_URL}?t={int(time.time())}"  # bypass cache
@@ -40,11 +40,6 @@ Downloading latest version...")
             messagebox.showinfo("Update Complete", "Software updated successfully. Restarting now...")
             import sys, os
             os.execl(sys.executable, sys.executable, *sys.argv)  # restart app
-        else:
-            messagebox.showerror("Update Failed", "Could not download the update.")
-    except Exception as e:
-        messagebox.showerror("Error", f"Update failed: {e}")
-
         else:
             messagebox.showerror("Update Failed", "Could not download the update.")
     except Exception as e:
@@ -746,6 +741,7 @@ class PanelDesigner:
 
         part_totals = defaultdict(lambda: {"desc": "", "total": 0, "panels": defaultdict(int)})
         busbar_totals = defaultdict(lambda: {"total": 0, "panels": defaultdict(int), "desc": ""})
+        busbar_materials = []
         
         panel_files = [f for f in os.listdir(PANELS_FOLDER) if f.endswith(".json")]
         relevant_panels = []
@@ -864,6 +860,27 @@ class PanelDesigner:
         
         messagebox.showinfo("BOM Generated", "BOM added to Google Sheets, including 'Total BOM' sheet!")
     
+    
+        # Append Busbar Materials at the end of Total_BOM
+        if busbar_materials:
+            total_bom.append(["Part No.", "Description"])
+            for item in busbar_materials:
+                total_bom.append(item)
+            # Gray header formatting (only header row)
+            header_row_index = len(total_bom) - len(busbar_materials) - 1
+            # Apply formatting here if using gspread-formatting or similar
+            try:
+                gray_header = CellFormat(
+                    backgroundColor=Color(0.8, 0.8, 0.8),
+                    textFormat=TextFormat(bold=True)
+                )
+                # Apply to first two columns of header row
+                format_cell_range(total_bom_sheet, f"A{header_row_index+1}:B{header_row_index+1}", gray_header)
+            except Exception as fmt_err:
+                print("Formatting failed:", fmt_err)
+
+    
+
     def find_nearest_highest_busbar(self, area_value):
         if self.busbar_data.empty:
             return None
