@@ -1,4 +1,4 @@
-__version__ = "2025.08.10"
+__version__ = "2025.08.21"
 
 import tkinter as tk
 from tkinter import simpledialog, filedialog, messagebox, ttk
@@ -10,6 +10,9 @@ import numpy as np
 import os
 import sys
 import gspread
+from reportlab.lib.pagesizes import A4
+from reportlab.pdfgen import canvas
+import subprocess
 from gspread_formatting import format_cell_range, CellFormat, Color, TextFormat
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
@@ -843,6 +846,45 @@ class PanelDesigner:
         total_ws.clear()
         
         total_ws.update(values=serializable_data, range_name="A1")
+        # --- Save Total BOM as PDF in Desktop/ProjectName ---
+        desktop_path = os.path.join(os.path.expanduser("~"), "Desktop")
+        project_folder = os.path.join(desktop_path, self.project)
+        os.makedirs(project_folder, exist_ok=True)
+
+        pdf_path = os.path.join(project_folder, "Total_BOM.pdf")
+        c = canvas.Canvas(pdf_path, pagesize=A4)
+        width, height = A4
+
+        y_position = height - 40
+        c.setFont("Helvetica-Bold", 14)
+        c.drawString(40, y_position, f"Total BOM - {self.customer} | {self.project} | {self.ref}")
+        y_position -= 20
+
+        c.setFont("Helvetica", 10)
+        for row in serializable_data:
+            row_text = " | ".join(str(cell) for cell in row if cell is not None)
+            c.drawString(40, y_position, row_text)
+            y_position -= 14
+            if y_position < 40:
+                c.showPage()
+                c.setFont("Helvetica", 10)
+                y_position = height - 40
+
+        c.save()
+
+        # Try opening the PDF automatically
+        try:
+            if os.name == "nt":  # Windows
+                os.startfile(pdf_path)
+            elif sys.platform == "darwin":  # macOS
+                subprocess.Popen(["open", pdf_path])
+            else:  # Linux
+                subprocess.Popen(["xdg-open", pdf_path])
+        except Exception as e:
+            print("Could not open PDF automatically:", e)
+
+        messagebox.showinfo("PDF Saved", f"Total BOM PDF saved to:\n{pdf_path}")
+
 
         header_format = {
             "backgroundColor": {
@@ -917,18 +959,41 @@ class PanelDesigner:
 
 def get_credentials():
     creds = None
-    if os.path.exists(TOKEN_FILE):
-        creds = Credentials.from_authorized_user_file(TOKEN_FILE, SCOPES)
-    if not creds or not creds.valid:
+    try:
+        if os.path.exists(TOKEN_FILE):
+            creds = Credentials.from_authorized_user_file(TOKEN_FILE, SCOPES)
+
+        if creds and creds.valid:
+            return creds
+
         if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-        else:
-            flow = InstalledAppFlow.from_client_secrets_file(CREDENTIALS_FILE, SCOPES)
-            creds = flow.run_local_server(port=0)
+            try:
+                creds.refresh(Request())
+                with open(TOKEN_FILE, "w") as token:
+                    token.write(creds.to_json())
+                return creds
+            except Exception as e:
+                print("Refresh failed, regenerating token.json:", e)
+                os.remove(TOKEN_FILE)
+
+        # If creds invalid or no token file, run OAuth flow
+        flow = InstalledAppFlow.from_client_secrets_file(CREDENTIALS_FILE, SCOPES)
+        creds = flow.run_local_server(port=0)
         with open(TOKEN_FILE, "w") as token:
             token.write(creds.to_json())
-    return creds
 
+        return creds
+
+    except Exception as e:
+        # Last fallback: regenerate token.json completely
+        print("Credential error, regenerating:", e)
+        if os.path.exists(TOKEN_FILE):
+            os.remove(TOKEN_FILE)
+        flow = InstalledAppFlow.from_client_secrets_file(CREDENTIALS_FILE, SCOPES)
+        creds = flow.run_local_server(port=0)
+        with open(TOKEN_FILE, "w") as token:
+            token.write(creds.to_json())
+        return creds
 
 def load_all_projects():
     projects = {}
