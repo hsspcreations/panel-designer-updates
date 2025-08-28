@@ -1,7 +1,9 @@
-__version__ = "2025.08.21"
+
+__version__ = "2025.08.24b"
 
 import tkinter as tk
 from tkinter import simpledialog, filedialog, messagebox, ttk
+import tkinter.font as tkfont
 import json
 import requests
 import shutil
@@ -11,7 +13,7 @@ import os
 import sys
 import gspread
 from reportlab.lib.pagesizes import A4
-from reportlab.pdfgen import canvas
+from reportlab.pdfgen import canvas as rl_canvas
 import subprocess
 from gspread_formatting import format_cell_range, CellFormat, Color, TextFormat
 from google.oauth2.credentials import Credentials
@@ -21,37 +23,39 @@ from PIL import Image, ImageTk
 from collections import defaultdict
 
 BREAKER_FILE = "breaker_types.json"
-APPDATA_FOLDER = os.path.join(os.environ.get("APPDATA"), "PanelDesigner")
+APPDATA_FOLDER = os.path.join(os.environ.get("APPDATA") or os.path.expanduser("~"), "PanelDesigner")
 PANELS_FOLDER = os.path.join(APPDATA_FOLDER, "panels")
 os.makedirs(PANELS_FOLDER, exist_ok=True)
-TOKEN_FILE = "token.json"
-
+TOKEN_FILE = os.path.join(APPDATA_FOLDER, "token.json")
 
 
 def update_software():
     import time
-    messagebox.showinfo("Updater", f"Current version: {__version__}\nDownloading latest version...")
+    messagebox.showinfo("Updater", f"Current version: {__version__}\\nDownloading latest version...")
     UPDATE_URL = "https://raw.githubusercontent.com/hsspcreations/panel-designer-updates/refs/heads/main/main.py"
     try:
         url = f"{UPDATE_URL}?t={int(time.time())}"  # bypass cache
         response = requests.get(url, stream=True)
         if response.status_code == 200:
             backup_path = "main_backup.py"
-            shutil.copy("main.py", backup_path)  # backup old version
+            if os.path.exists("main.py"):
+                shutil.copy("main.py", backup_path)  # backup old version
             with open("main.py", "wb") as f:
                 f.write(response.content)
             messagebox.showinfo("Update Complete", "Software updated successfully. Restarting now...")
-            import sys, os
             os.execl(sys.executable, sys.executable, *sys.argv)  # restart app
         else:
             messagebox.showerror("Update Failed", "Could not download the update.")
     except Exception as e:
         messagebox.showerror("Error", f"Update failed: {e}")
+
+
 def resource_path(relative_path):
     """Get absolute path to resource, works for dev and PyInstaller"""
     if hasattr(sys, "_MEIPASS"):
         return os.path.join(sys._MEIPASS, relative_path)
     return os.path.join(os.path.abspath("."), relative_path)
+
 
 CREDENTIALS_FILE = resource_path("credentials.json")
 BUSBAR_DATA_FILE = resource_path("Copy of Quotation Calculator v1.5.csv")
@@ -70,6 +74,7 @@ SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
     "https://www.googleapis.com/auth/drive"
 ]
+
 
 class Tooltip:
     def __init__(self, canvas, text):
@@ -90,6 +95,7 @@ class Tooltip:
             self.tip_window.destroy()
             self.tip_window = None
 
+
 class PanelDesigner:
     def __init__(self, root, customer, project, ref):
         self.root = root
@@ -97,18 +103,28 @@ class PanelDesigner:
         self.project = project
         self.ref = ref
         self.root.title(f"Panel Designer - {project}")
-        self.root.iconbitmap(resource_path("Hssp.ico"))
+        try:
+            self.root.iconbitmap(resource_path("Hssp.ico"))
+        except Exception:
+            pass
 
         self.breaker_types = self.load_breaker_types()
         self.busbar_data = self.load_busbar_data()
         self.saved_panels = self.load_saved_panels()
         self.panel_name = None
+        self.panel_depth = None  # store panel depth (mm)
         self.cubicles = []
         self.busbars = []
         self.tooltip = None
         self.icon_image = None
         self.drag_data = {"item": None, "x": 0, "y": 0}
         self.undo_stack = []
+        self.footer_ids = []  # track footer elements for theme refresh
+
+        # THEME STATE
+        self.is_dark_mode = False
+        self.style = ttk.Style()
+        self.palette = self.get_palette("light")
 
         top_frame = tk.Frame(root)
         top_frame.pack(side=tk.TOP, fill=tk.X, padx=10, pady=10)
@@ -129,6 +145,8 @@ class PanelDesigner:
         tk.Button(top_frame, text="Generate BOM", command=self.generate_bom).pack(side=tk.LEFT, padx=5)
         tk.Button(top_frame, text="Undo", command=self.undo_last_action).pack(side=tk.LEFT, padx=5)
         tk.Button(top_frame, text="Update Software", command=update_software).pack(side=tk.LEFT, padx=5)
+        self.theme_btn = ttk.Button(top_frame, text="🌙 Dark Mode", command=self.toggle_theme)
+        self.theme_btn.pack(side=tk.RIGHT, padx=5)
 
         canvas_frame = tk.Frame(root)
         canvas_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
@@ -142,9 +160,18 @@ class PanelDesigner:
         v_scroll.pack(side=tk.RIGHT, fill=tk.Y)
         self.canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
+        self.apply_theme()
         self.add_bottom_right_info()
 
     def add_bottom_right_info(self):
+        # clear previous footer items if any
+        if hasattr(self, "footer_ids") and self.footer_ids:
+            for _id in self.footer_ids:
+                try:
+                    self.canvas.delete(_id)
+                except Exception:
+                    pass
+            self.footer_ids = []
         canvas_width = int(self.canvas['width'])
         canvas_height = int(self.canvas['height'])
         padding = 10
@@ -155,28 +182,28 @@ class PanelDesigner:
                 img = Image.open(icon_path)
                 img = img.resize((32, 32))
                 self.icon_image = ImageTk.PhotoImage(img)
-                self.canvas.create_image(canvas_width - 40, canvas_height - 60, image=self.icon_image, anchor="se")
-            except:
+                self.footer_ids.append(self.canvas.create_image(canvas_width - 40, canvas_height - 60, image=self.icon_image, anchor="se"))
+            except Exception:
                 pass
 
-        self.canvas.create_text(canvas_width - padding, canvas_height - 30,
-                                text="hsspcreations@gmail.com", font=("Arial", 10), fill="black", anchor="se")
-        self.canvas.create_text(canvas_width - padding, canvas_height - 10,
-                                text="0764319139", font=("Arial", 10), fill="black", anchor="se")
+        self.footer_ids.append(self.canvas.create_text(canvas_width - padding, canvas_height - 30,
+                                text="hsspcreations@gmail.com", font=("Arial", 10), fill=self.palette["muted_text"], anchor="se"))
+        self.footer_ids.append(self.canvas.create_text(canvas_width - padding, canvas_height - 10,
+                                text="0764319139", font=("Arial", 10), fill=self.palette["muted_text"], anchor="se"))
 
     def load_breaker_types(self):
         if os.path.exists(BREAKER_FILE):
             try:
                 with open(BREAKER_FILE, "r") as f:
                     return json.load(f)
-            except:
+            except Exception:
                 return {}
         return {}
 
     def save_breaker_types(self):
         with open(BREAKER_FILE, "w") as f:
             json.dump(self.breaker_types, f)
-            
+
     def load_busbar_data(self):
         try:
             df = pd.read_csv(BUSBAR_DATA_FILE)
@@ -204,7 +231,7 @@ class PanelDesigner:
                                 pinfo.get("project") == self.project and
                                 pinfo.get("ref") == self.ref):
                             panels.append(file[:-5])
-                except:
+                except Exception:
                     continue
         return panels
 
@@ -227,21 +254,64 @@ class PanelDesigner:
             self.load_panel(selected_panel)
 
     def create_panel(self):
-        name = simpledialog.askstring("Panel Name", "Enter a name for the new panel:")
-        if name:
+        # Combined form for panel name and depth in a single window
+        top = tk.Toplevel(self.root)
+        top.title("Create New Panel")
+        top.grab_set()
+
+        frm = tk.Frame(top, padx=10, pady=10)
+        frm.pack(fill="both", expand=True)
+
+        tk.Label(frm, text="Panel Name:").grid(row=0, column=0, sticky="e", pady=5, padx=5)
+        name_var = tk.StringVar()
+        tk.Entry(frm, textvariable=name_var, width=30).grid(row=0, column=1, pady=5, padx=5)
+
+        tk.Label(frm, text="Panel Depth (mm):").grid(row=1, column=0, sticky="e", pady=5, padx=5)
+        depth_var = tk.StringVar(value="600")
+        tk.Entry(frm, textvariable=depth_var, width=10).grid(row=1, column=1, sticky="w", pady=5, padx=5)
+
+        def confirm():
+            name = name_var.get().strip()
+            if not name:
+                messagebox.showerror("Invalid Name", "Please enter a panel name.")
+                return
+            try:
+                depth = int(depth_var.get())
+                if depth <= 0:
+                    raise ValueError
+            except ValueError:
+                messagebox.showerror("Invalid Depth", "Depth must be a positive integer (mm).")
+                return
+
             self.panel_name = name
+            self.panel_depth = depth
+
             self.cubicles.clear()
             self.busbars.clear()
             self.canvas.delete("all")
             self.panel_var.set(name)
+            self.apply_theme()
             self.add_bottom_right_info()
+
+            try:
+                self.canvas.create_text(20, 10, text=f"Depth: {self.panel_depth} mm", anchor="nw", font=("Arial", 10, "bold"))
+            except Exception:
+                pass
+
+            top.destroy()
+
+        btns = tk.Frame(frm)
+        btns.grid(row=2, column=0, columnspan=2, pady=10)
+        ttk.Button(btns, text="Create", command=confirm).pack(side="left", padx=5)
+        ttk.Button(btns, text="Cancel", command=top.destroy).pack(side="left", padx=5)
+
+        top.wait_window()
 
     def add_cubicle(self):
         if not self.panel_name:
             messagebox.showwarning("No Panel", "Please create or select a panel first.")
             return
 
-        # Create the cubicle size selection window
         top = tk.Toplevel(self.root)
         top.title("Select Cubicle Size")
         tk.Label(top, text="Select Cubicle Size:").pack(pady=5)
@@ -262,9 +332,9 @@ class PanelDesigner:
                 x = last["x"] + last["width"] * SCALE
                 y = last["y"]
 
-            rect = self.canvas.create_rectangle(x, y, x + w, y + h, fill="lightblue", outline="black", width=3)
+            rect = self.canvas.create_rectangle(x, y, x + w, y + h, fill=self.palette["cubicle_fill"], outline=self.palette["cubicle_outline"], width=3)
 
-            cubicle_data = { "id": rect, "width": width, "height": height, "x": x, "y": y, "compartments": [] }
+            cubicle_data = {"id": rect, "width": width, "height": height, "x": x, "y": y, "compartments": []}
             self.cubicles.append(cubicle_data)
             self.undo_stack.append({"type": "add_cubicle", "cubicle": cubicle_data})
 
@@ -279,10 +349,8 @@ class PanelDesigner:
         if not self.cubicles:
             messagebox.showwarning("Delete Cubicle", "No cubicles to delete.")
             return
-
         cubicle = self.cubicles.pop()
         self.canvas.delete(cubicle["id"])
-
         for comp in cubicle["compartments"]:
             for sec in comp["sections"]:
                 self.canvas.delete(sec["id"])
@@ -307,7 +375,7 @@ class PanelDesigner:
             for j, section_name in enumerate(SECTION_NAMES):
                 sec_x1 = x1 + j * section_width
                 sec_x2 = sec_x1 + section_width
-                section_rect = self.canvas.create_rectangle(sec_x1, comp_y1, sec_x2, comp_y2, fill="white")
+                section_rect = self.canvas.create_rectangle(sec_x1, comp_y1, sec_x2, comp_y2, fill=self.palette["section_empty"], outline=self.palette["section_outline"])
                 self.canvas.tag_bind(section_rect, "<Button-1>",
                                      lambda e, s=section_name, r=section_rect, c=compartment: self.select_item(s, r, c))
                 compartment["sections"].append({"name": section_name, "id": section_rect, "item": None})
@@ -316,6 +384,94 @@ class PanelDesigner:
 
     def select_item(self, section_name, section_rect, compartment):
         self.show_search_popup(section_name, section_rect, compartment)
+
+    # ---------- TEXT FITTING HELPERS ----------
+    def _compute_text_layout(self, section_rect, font_name=("Arial", 6)):
+        coords = self.canvas.coords(section_rect)
+        x1, y1, x2, y2 = coords
+        width = max(1, x2 - x1)
+        height = max(1, y2 - y1)
+
+        size = font_name[1] if isinstance(font_name, tuple) else 6
+        # Attempt to find a font size that fits at least one column
+        for fs in range(int(size), 3, -1):
+            fnt = tkfont.Font(family=font_name[0] if isinstance(font_name, tuple) else "Arial", size=fs)
+            line_h = max(1, fnt.metrics("linespace"))
+            char_w = max(1, fnt.measure("W"))
+            max_lines = max(1, int(height // line_h))
+            if max_lines < 1:
+                continue
+            # For a single column: need char_w width
+            if char_w <= width:
+                return fnt, line_h, char_w, max_lines
+        # Fallback minimal font
+        fnt = tkfont.Font(family="Arial", size=4)
+        line_h = max(1, fnt.metrics("linespace"))
+        char_w = max(1, fnt.measure("W"))
+        max_lines = max(1, int(height // line_h))
+        return fnt, line_h, char_w, max_lines
+
+    def _split_text_into_columns(self, text, max_lines):
+        # Split into chunks (columns) of length max_lines
+        chunks = []
+        text = str(text)
+        for i in range(0, len(text), max_lines):
+            chunks.append(text[i:i + max_lines])
+        return chunks
+
+    def draw_vertical_text_in_section(self, section, text, desc):
+        """Draw vertical, wrapped text that fits inside the section rectangle.
+        Stores the created text item ids in section['item']['text_ids'].
+        """
+        section_rect = section["id"]
+        # Remove existing text ids if any
+        try:
+            old_text_ids = section.get("item", {}).get("text_ids", [])
+            for tid in old_text_ids or []:
+                self.canvas.delete(tid)
+        except Exception:
+            pass
+
+        coords = self.canvas.coords(section_rect)
+        x1, y1, x2, y2 = coords
+        width = x2 - x1
+
+        fnt, line_h, char_w, max_lines = self._compute_text_layout(section_rect, ("Arial", 6))
+        if max_lines < 1:
+            max_lines = 1
+        columns = self._split_text_into_columns(text, max_lines)
+
+        # Compute how many columns fit horizontally; if not all fit, truncate with ellipsis
+        col_gap = max(2, int(char_w * 0.5))
+        total_needed = len(columns) * char_w + (len(columns) - 1) * col_gap
+        max_cols_fit = max(1, int((width + col_gap) // (char_w + col_gap)))
+        draw_columns = columns[:max_cols_fit]
+        truncated = len(columns) > max_cols_fit
+
+        # Center the columns horizontally
+        draw_width = len(draw_columns) * char_w + (len(draw_columns) - 1) * col_gap
+        start_x = x1 + (width - draw_width) / 2 + char_w / 2
+        center_y = (y1 + y2) / 2
+
+        text_ids = []
+        for idx, chunk in enumerate(draw_columns):
+            col_text = "\\n".join(list(chunk))
+            tx = start_x + idx * (char_w + col_gap)
+            tid = self.canvas.create_text(tx, center_y, text=col_text, font=fnt, fill=self.palette["text"], anchor="center", justify="center")
+            self.canvas.tag_bind(tid, "<Enter>", lambda e, d=desc: self.show_tooltip(e, d))
+            self.canvas.tag_bind(tid, "<Leave>", lambda e: self.hide_tooltip())
+            text_ids.append(tid)
+
+        # If truncated, draw a tiny ellipsis at the far right
+        if truncated:
+            ellipsis_id = self.canvas.create_text(x2 - 2, y1 + 2, text="…", font=("Arial", max(5, fnt.cget("size") - 1)), fill=self.palette["text"], anchor="ne")
+            text_ids.append(ellipsis_id)
+
+        # Save text ids with the item for future cleanup/undo
+        if section.get("item"):
+            section["item"]["text_ids"] = text_ids
+
+        return text_ids
 
     def show_search_popup(self, section_name, section_rect, compartment):
         popup = tk.Toplevel(self.root)
@@ -345,28 +501,40 @@ class PanelDesigner:
                 model = selected.split("(")[-1].strip(")")
                 desc = selected.split("(")[0].strip()
 
-                self.canvas.itemconfig(section_rect, fill="lightgreen")
-                coords = self.canvas.coords(section_rect)
-                x = (coords[0] + coords[2]) / 2
-                y = (coords[1] + coords[3]) / 2
-                vertical_text = "\n".join(model)
-                text_id = self.canvas.create_text(x, y, text=vertical_text, font=("Arial", 6))
-                self.canvas.tag_bind(text_id, "<Enter>", lambda e, d=desc: self.show_tooltip(e, d))
-                self.canvas.tag_bind(text_id, "<Leave>", lambda e: self.hide_tooltip())
-
-                
+                self.canvas.itemconfig(section_rect, fill=self.palette["section_selected"])
+                # find the section object
+                target_section = None
                 for section in compartment["sections"]:
                     if section["id"] == section_rect:
-                        previous_item = section["item"]
-                        section["item"] = {"model": model, "desc": desc}
-                        self.undo_stack.append({
-                            "type": "select_component",
-                            "section": section,
-                            "previous_item": previous_item,
-                            "text_id": text_id,
-                            "rect_id": section_rect
-                        })
+                        target_section = section
+                        break
+                if target_section is None:
+                    popup.destroy()
+                    return
 
+                # remove any previous text in this section
+                try:
+                    old_ids = target_section.get("item", {}).get("text_ids", [])
+                    for tid in old_ids or []:
+                        self.canvas.delete(tid)
+                except Exception:
+                    pass
+
+                previous_item = target_section.get("item")
+                target_section["item"] = {"model": model, "desc": desc, "text_ids": []}
+
+                # draw new text vertically to fit
+                new_text_ids = self.draw_vertical_text_in_section(target_section, model, desc)
+                target_section["item"]["text_ids"] = new_text_ids
+
+                # push undo
+                self.undo_stack.append({
+                    "type": "select_component",
+                    "section": target_section,
+                    "previous_item": previous_item,
+                    "new_text_ids": new_text_ids,
+                    "rect_id": section_rect
+                })
 
                 popup.destroy()
 
@@ -380,7 +548,6 @@ class PanelDesigner:
         if self.tooltip:
             self.tooltip.hide()
 
-    
     def add_busbar_terminal_form(self):
         form = tk.Toplevel(self.root)
         form.title("Add Busbar Terminal")
@@ -401,8 +568,9 @@ class PanelDesigner:
         ttk.Combobox(form, textvariable=size_var, values=busbar_sizes, state="readonly").grid(row=0, column=1, padx=5, pady=5)
 
         tk.Label(form, text="No. of Runs:").grid(row=1, column=0, padx=5, pady=5)
-        runs_var = tk.IntVar(value=1)
-        ttk.Combobox(form, textvariable=runs_var, values=[1, 2, 3], state="readonly").grid(row=1, column=1, padx=5, pady=5)
+        runs_var = tk.StringVar(value="1")
+        runs_entry = tk.Entry(form, textvariable=runs_var)
+        runs_entry.grid(row=1, column=1, padx=5, pady=5)
 
         tk.Label(form, text="Phase:").grid(row=2, column=0, padx=5, pady=5)
         phase_var = tk.StringVar(value="Single Phase")
@@ -413,7 +581,14 @@ class PanelDesigner:
         ttk.Combobox(form, textvariable=type_var, values=["Horizontal", "Vertical"], state="readonly").grid(row=3, column=1, padx=5, pady=5)
 
         def submit():
-            self.spawn_busbar_terminal(size_var.get(), runs_var.get(), phase_var.get(), type_var.get())
+            try:
+                runs_int = int(runs_var.get())
+                if runs_int <= 0:
+                    raise ValueError
+            except ValueError:
+                messagebox.showerror("Invalid Input", "No. of Runs must be a positive integer.")
+                return
+            self.spawn_busbar_terminal(size_var.get(), runs_int, phase_var.get(), type_var.get())
             form.destroy()
 
         tk.Button(form, text="Add", command=submit).grid(row=4, column=0, columnspan=2, pady=10)
@@ -424,12 +599,12 @@ class PanelDesigner:
         if busbar_type.lower() == "horizontal":
             x1, x2 = 50, 250
             y = 150
-            line_id = self.canvas.create_line(x1, y, x2, y, fill="purple", width=4)
+            line_id = self.canvas.create_line(x1, y, x2, y, fill=self.palette["busbar_terminal"], width=4)
             coords = [x1, y, x2, y]
         else:
             x = 200
             y1, y2 = 50, 300
-            line_id = self.canvas.create_line(x, y1, x, y2, fill="purple", width=4)
+            line_id = self.canvas.create_line(x, y1, x, y2, fill=self.palette["busbar_terminal"], width=4)
             coords = [x, y1, x, y2]
 
         busbar_data = {
@@ -440,7 +615,7 @@ class PanelDesigner:
             "current_density": None,
             "phase": phase,
             "busbar_size": busbar_size,
-            "no_of_runs": no_of_runs
+            "no_of_runs": int(no_of_runs)
         }
         self.busbars.append(busbar_data)
         self.undo_stack.append({"type": "add_busbar", "busbar": busbar_data})
@@ -458,7 +633,7 @@ class PanelDesigner:
         tk.Label(form, text="Current Density (A/mm²):").grid(row=1, column=0, padx=5, pady=5)
         cd_var = tk.DoubleVar(value=2.5)
         tk.Entry(form, textvariable=cd_var).grid(row=1, column=1, padx=5, pady=5)
-        
+
         tk.Label(form, text="Phase:").grid(row=2, column=0, padx=5, pady=5)
         phase_var = tk.StringVar(value="Single Phase")
         ttk.Combobox(form, textvariable=phase_var, values=["Single Phase", "Three Phase"], state="readonly").grid(row=2, column=1, padx=5, pady=5)
@@ -474,7 +649,7 @@ class PanelDesigner:
     def spawn_vertical_busbar(self, amperage, current_density, phase):
         x = 150
         y1, y2 = 50, 300
-        line_id = self.canvas.create_line(x, y1, x, y2, fill="orange", width=4)
+        line_id = self.canvas.create_line(x, y1, x, y2, fill=self.palette["busbar"], width=4)
         self.canvas.tag_raise(line_id)
         busbar_data = {
             "id": line_id,
@@ -500,7 +675,7 @@ class PanelDesigner:
         tk.Label(form, text="Current Density (A/mm²):").grid(row=1, column=0, padx=5, pady=5)
         cd_var = tk.DoubleVar(value=2.5)
         tk.Entry(form, textvariable=cd_var).grid(row=1, column=1, padx=5, pady=5)
-        
+
         tk.Label(form, text="Phase:").grid(row=2, column=0, padx=5, pady=5)
         phase_var = tk.StringVar(value="Single Phase")
         ttk.Combobox(form, textvariable=phase_var, values=["Single Phase", "Three Phase"], state="readonly").grid(row=2, column=1, padx=5, pady=5)
@@ -516,7 +691,7 @@ class PanelDesigner:
     def spawn_horizontal_busbar(self, amperage, current_density, phase):
         x1, x2 = 50, 250
         y = 100
-        line_id = self.canvas.create_line(x1, y, x2, y, fill="orange", width=4)
+        line_id = self.canvas.create_line(x1, y, x2, y, fill=self.palette["busbar"], width=4)
         self.canvas.tag_raise(line_id)
         busbar_data = {
             "id": line_id,
@@ -561,12 +736,8 @@ class PanelDesigner:
     def make_busbar_resizable(self, line_id, busbar_type):
         handle_size = 6
         coords = self.canvas.coords(line_id)
-        if busbar_type == "vertical":
-            handle_id = self.canvas.create_rectangle(coords[2] - handle_size, coords[3] - handle_size,
-                                                     coords[2] + handle_size, coords[3] + handle_size, fill="red")
-        else:
-            handle_id = self.canvas.create_rectangle(coords[2] - handle_size, coords[3] - handle_size,
-                                                     coords[2] + handle_size, coords[3] + handle_size, fill="red")
+        handle_id = self.canvas.create_rectangle(coords[2] - handle_size, coords[3] - handle_size,
+                                                 coords[2] + handle_size, coords[3] + handle_size, fill=self.palette["handle"], tags=("handle",))
 
         def on_press(event):
             self.drag_data["item"] = handle_id
@@ -608,8 +779,10 @@ class PanelDesigner:
         with open(f"{PANELS_FOLDER}/{name}.json", "r") as f:
             panel_data = json.load(f)
 
+        self.panel_depth = panel_data.get("panel_depth")
+
         for cub in panel_data.get("cubicles", []):
-            rect = self.canvas.create_rectangle(*cub["coords"], fill=cub.get("color", "lightblue"))
+            rect = self.canvas.create_rectangle(*cub["coords"], fill=self.palette["cubicle_fill"], outline=self.palette["cubicle_outline"], width=3)
             cubicle_data = {
                 "id": rect,
                 "width": cub["width"],
@@ -628,14 +801,9 @@ class PanelDesigner:
                     item = saved_sec.get("item")
                     if item:
                         section = cubicle_data["compartments"][comp_idx]["sections"][sec_idx]
-                        self.canvas.itemconfig(section["id"], fill="lightgreen")
-                        coords = self.canvas.coords(section["id"])
-                        x = (coords[0] + coords[2]) / 2
-                        y = (coords[1] + coords[3]) / 2
-                        text_id = self.canvas.create_text(x, y, text="\n".join(item["model"]), font=("Arial", 6))
-                        self.canvas.tag_bind(text_id, "<Enter>", lambda e, d=item["desc"]: self.show_tooltip(e, d))
-                        self.canvas.tag_bind(text_id, "<Leave>", lambda e: self.hide_tooltip())
-                        section["item"] = item
+                        self.canvas.itemconfig(section["id"], fill=self.palette["section_selected"])
+                        section["item"] = {"model": item["model"], "desc": item.get("desc", ""), "text_ids": []}
+                        self.draw_vertical_text_in_section(section, item["model"], item.get("desc", ""))
 
         for busbar in panel_data.get("busbars", []):
             line = self.canvas.create_line(*busbar["coords"], fill="orange", width=3)
@@ -645,7 +813,14 @@ class PanelDesigner:
             self.make_busbar_draggable(line, busbar["type"])
             self.make_busbar_resizable(line, busbar["type"])
 
+        self.apply_theme()
         self.add_bottom_right_info()
+
+        if self.panel_depth:
+            try:
+                self.canvas.create_text(20, 10, text=f"Depth: {self.panel_depth} mm", anchor="nw", font=("Arial", 10, "bold"))
+            except Exception:
+                pass
 
     def save_panel(self):
         if not self.panel_name:
@@ -654,6 +829,7 @@ class PanelDesigner:
 
         panel_data = {
             "project_info": {"customer": self.customer, "project": self.project, "ref": self.ref},
+            "panel_depth": self.panel_depth,
             "cubicles": [],
             "busbars": self.busbars
         }
@@ -669,7 +845,12 @@ class PanelDesigner:
             for comp in cub["compartments"]:
                 comp_data = {"sections": []}
                 for sec in comp["sections"]:
-                    comp_data["sections"].append({"name": sec["name"], "item": sec["item"]})
+                    # Don't persist text_ids to keep save small
+                    item = sec["item"]
+                    if item:
+                        comp_data["sections"].append({"name": sec["name"], "item": {"model": item["model"], "desc": item.get("desc", "")}})
+                    else:
+                        comp_data["sections"].append({"name": sec["name"], "item": None})
                 cub_data["compartments"].append(comp_data)
             panel_data["cubicles"].append(cub_data)
 
@@ -678,7 +859,6 @@ class PanelDesigner:
 
         messagebox.showinfo("Saved", f"Panel '{self.panel_name}' saved successfully!")
         self.refresh_panel_menu()
-        self.generate_bom()
 
     def load_breaker_excel(self):
         file_path = filedialog.askopenfilename(filetypes=[("Excel files", "*.xlsx")])
@@ -707,6 +887,7 @@ class PanelDesigner:
             messagebox.showwarning("Generate BOM", "Please add cubicles and components first.")
             return
 
+        # Google Sheets sync
         creds = get_credentials()
         client = gspread.authorize(creds)
         spreadsheet = None
@@ -739,13 +920,14 @@ class PanelDesigner:
             coords = tuple(map(int, bus["coords"]))
             length = (coords[2] - coords[0]) if bus["type"] == "horizontal" else (coords[3] - coords[1])
             data.append([bus.get("type"), bus.get("amperage"), bus.get("current_density"), str(coords), bus.get("phase"), bus.get("busbar_size", ""), bus.get("no_of_runs", ""), length])
-        
+
         ws.update(values=data, range_name="A1")
 
+        # Totals across project
         part_totals = defaultdict(lambda: {"desc": "", "total": 0, "panels": defaultdict(int)})
+        category_totals = defaultdict(lambda: defaultdict(lambda: {"desc": "", "total": 0, "panels": defaultdict(int)}))
         busbar_totals = defaultdict(lambda: {"total": 0, "panels": defaultdict(int), "desc": ""})
-        busbar_materials = []
-        
+
         panel_files = [f for f in os.listdir(PANELS_FOLDER) if f.endswith(".json")]
         relevant_panels = []
         no_match_counter = 0
@@ -758,32 +940,41 @@ class PanelDesigner:
                 if info.get("customer") == self.customer and info.get("project") == self.project and info.get("ref") == self.ref:
                     pname = fname[:-5]
                     relevant_panels.append(pname)
-                    
+
                     for cub in panel_data.get("cubicles", []):
                         for comp in cub.get("compartments", []):
                             for sec in comp.get("sections", []):
                                 item = sec.get("item")
                                 if item:
                                     model = item["model"]
-                                    desc = item["desc"]
+                                    desc = item.get("desc", "")
+                                    category = sec.get("name", "Others")
                                     part_totals[model]["desc"] = desc
                                     part_totals[model]["total"] += 1
                                     part_totals[model]["panels"][pname] += 1
-                    
-                    for busbar in panel_data.get("busbars", []):
-                        amp = busbar["amperage"]
-                        cd = busbar["current_density"]
-                        coords = busbar["coords"]
-                        phase = busbar["phase"]
-                        busbar_size_str = busbar.get("busbar_size", "")
-                        no_of_runs = busbar.get("no_of_runs", 1)
 
-                        length = (coords[2] - coords[0]) if busbar["type"] == "horizontal" else (coords[3] - coords[1])
-                        
+                                    cat_bucket = category_totals[category][model]
+                                    cat_bucket["desc"] = desc
+                                    cat_bucket["total"] += 1
+                                    cat_bucket["panels"][pname] += 1
+
+                    for busbar in panel_data.get("busbars", []):
+                        amp = busbar.get("amperage")
+                        cd = busbar.get("current_density")
+                        coords = busbar.get("coords", [0, 0, 0, 0])
+                        phase = busbar.get("phase", "Single Phase")
+                        busbar_size_str = busbar.get("busbar_size", "")
+                        try:
+                            no_of_runs = int(busbar.get("no_of_runs", 1))
+                        except Exception:
+                            no_of_runs = 1
+
+                        length = (coords[2] - coords[0]) if busbar.get("type") == "horizontal" else (coords[3] - coords[1])
+
                         if busbar_size_str:
                             bus_part_no = busbar_size_str
                             bus_desc = busbar_size_str
-                            qty = length * no_of_runs
+                            qty = max(0, int(length)) * no_of_runs
                             busbar_totals[bus_part_no]["desc"] = bus_desc
                             busbar_totals[bus_part_no]["total"] += qty
                             busbar_totals[bus_part_no]["panels"][pname] += qty
@@ -791,7 +982,7 @@ class PanelDesigner:
                         elif cd is not None and amp is not None and cd > 0 and amp > 0:
                             area_needed = amp / cd
                             nearest_busbar = self.find_nearest_highest_busbar(area_needed)
-                            
+
                             if nearest_busbar is None:
                                 bus_part_no = f"NO_MATCH_{no_match_counter}"
                                 bus_desc = f"No match for Phase={phase}, Amperage={amp}, CD={cd}, AreaNeeded={area_needed:.2f}"
@@ -800,16 +991,16 @@ class PanelDesigner:
                             else:
                                 bus_part_no = nearest_busbar["Part no"]
                                 bus_desc = nearest_busbar["Item description"]
-                                bus_runs = nearest_busbar["No. of runs"]
-                                base_qty = length * bus_runs
+                                bus_runs = int(nearest_busbar["No. of runs"]) if "No. of runs" in nearest_busbar else 1
+                                base_qty = max(0, int(length)) * bus_runs
                                 multiplier = 2 if phase == "Single Phase" else 4
                                 qty = base_qty * multiplier
-                            
+
                             busbar_totals[bus_part_no]["desc"] = bus_desc
                             busbar_totals[bus_part_no]["total"] += qty
                             busbar_totals[bus_part_no]["panels"][pname] += qty
 
-
+        # Total BOM sheet
         try:
             total_ws = spreadsheet.worksheet("Total BOM")
         except gspread.WorksheetNotFound:
@@ -817,13 +1008,13 @@ class PanelDesigner:
 
         header = ["Part No.", "Description", "Total Qty"] + relevant_panels
         total_data = [header]
-        
+
         for model, info in part_totals.items():
             row = [model, info["desc"], info["total"]]
             for pname in relevant_panels:
                 row.append(info["panels"].get(pname, 0))
             total_data.append(row)
-        
+
         total_data.append([])
         total_data.append(["Busbar Materials"])
         total_data.append(header)
@@ -837,100 +1028,129 @@ class PanelDesigner:
         for row in total_data:
             new_row = []
             for item in row:
-                if isinstance(item, np.int64):
-                    new_row.append(int(item))
+                if isinstance(item, np.generic):
+                    new_row.append(item.item())
                 else:
                     new_row.append(item)
             serializable_data.append(new_row)
 
         total_ws.clear()
-        
         total_ws.update(values=serializable_data, range_name="A1")
-        # --- Save Total BOM as PDF in Desktop/ProjectName ---
+        header_format = {"backgroundColor": {"red": 0.8, "green": 0.8, "blue": 0.8}, "horizontalAlignment": "CENTER", "textFormat": {"bold": True}}
+        total_ws.format("A1:Z1", header_format)
+
+        # Grouped PDF
+        from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image as RLImage
+        from reportlab.lib import colors
+        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+
         desktop_path = os.path.join(os.path.expanduser("~"), "Desktop")
         project_folder = os.path.join(desktop_path, self.project)
         os.makedirs(project_folder, exist_ok=True)
 
         pdf_path = os.path.join(project_folder, "Total_BOM.pdf")
-        c = canvas.Canvas(pdf_path, pagesize=A4)
-        width, height = A4
+        doc = SimpleDocTemplate(pdf_path, pagesize=A4, rightMargin=24, leftMargin=24, topMargin=24, bottomMargin=24)
 
-        y_position = height - 40
-        c.setFont("Helvetica-Bold", 14)
-        c.drawString(40, y_position, f"Total BOM - {self.customer} | {self.project} | {self.ref}")
-        y_position -= 20
+        styles = getSampleStyleSheet()
+        elements = []
 
-        c.setFont("Helvetica", 10)
-        for row in serializable_data:
-            row_text = " | ".join(str(cell) for cell in row if cell is not None)
-            c.drawString(40, y_position, row_text)
-            y_position -= 14
-            if y_position < 40:
-                c.showPage()
-                c.setFont("Helvetica", 10)
-                y_position = height - 40
+        header_table_data = []
+        logo_path = resource_path("VLPP.ico")
+        if os.path.exists(logo_path):
+            header_logo = RLImage(logo_path, width=40, height=40)
+        else:
+            header_logo = Paragraph("", styles["Normal"])
 
-        c.save()
+        header_email = Paragraph("<b>venora@gmail.com</b>", styles["Normal"])
+        header_table_data.append([header_logo, header_email])
 
-        # Try opening the PDF automatically
+        header_table = Table(header_table_data, colWidths=[60, 440])
+        header_table.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "MIDDLE"), ("ALIGN", (1, 0), (1, 0), "RIGHT")]))
+        elements.append(header_table)
+        elements.append(Spacer(1, 8))
+
+        project_style = ParagraphStyle("ProjectInfo", parent=styles["Normal"], fontSize=10, leading=13, spaceAfter=6)
+        project_info_text = (f"<b>Customer:</b> {self.customer}<br/>"
+                             f"<b>Project:</b> {self.project}<br/>"
+                             f"<b>Reference:</b> {self.ref}")
+        project_info_para = Paragraph(project_info_text, project_style)
+        elements.append(project_info_para)
+        elements.append(Spacer(1, 8))
+
+        title = Paragraph("<b>Total Bill of Materials (BOM)</b>", styles["Title"])
+        elements.append(title)
+        elements.append(Spacer(1, 12))
+
+        def build_table(rows):
+            table = Table(rows, repeatRows=1)
+            table_style = TableStyle([
+                ("BACKGROUND", (0, 0), (-1, 0), colors.grey),
+                ("TEXTCOLOR", (0, 0), (-1, 0), colors.whitesmoke),
+                ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+                ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                ("BOTTOMPADDING", (0, 0), (-1, 0), 6),
+                ("GRID", (0, 0), (-1, -1), 0.25, colors.black),
+            ])
+            table.setStyle(table_style)
+            for i in range(1, len(rows)):
+                if i % 2 == 0:
+                    table.setStyle(TableStyle([("BACKGROUND", (0, i), (-1, i), colors.whitesmoke)]))
+                else:
+                    table.setStyle(TableStyle([("BACKGROUND", (0, i), (-1, i), colors.beige)]))
+            return table
+
+        ordered_categories = ["Breaker", "ELR/EFR", "PFR", "Power Analyzer/Energy Meter", "Indicator Light", "SPD"]
+        for cat in ordered_categories:
+            items = category_totals.get(cat, {})
+            if not items:
+                continue
+            elements.append(Paragraph(f"<b>{cat}</b>", styles["Heading2"]))
+            header_row = ["Part No.", "Description", "Total Qty"] + relevant_panels
+            rows = [header_row]
+            for model, info in items.items():
+                row = [model, info["desc"], int(info["total"])]
+                for pname in relevant_panels:
+                    row.append(int(info["panels"].get(pname, 0)))
+                rows.append(row)
+            elements.append(build_table(rows))
+            elements.append(Spacer(1, 12))
+
+        if busbar_totals:
+            elements.append(Paragraph("<b>Busbar Materials</b>", styles["Heading2"]))
+            header_row = ["Part No.", "Description", "Total Qty"] + relevant_panels
+            rows = [header_row]
+            for model, info in busbar_totals.items():
+                row = [model, info["desc"], int(info["total"])]
+                for pname in relevant_panels:
+                    row.append(int(info["panels"].get(pname, 0)))
+                rows.append(row)
+            elements.append(build_table(rows))
+
+        doc.build(elements)
+
         try:
-            if os.name == "nt":  # Windows
+            if os.name == "nt":
                 os.startfile(pdf_path)
-            elif sys.platform == "darwin":  # macOS
+            elif sys.platform == "darwin":
                 subprocess.Popen(["open", pdf_path])
-            else:  # Linux
+            else:
                 subprocess.Popen(["xdg-open", pdf_path])
         except Exception as e:
             print("Could not open PDF automatically:", e)
 
-        messagebox.showinfo("PDF Saved", f"Total BOM PDF saved to:\n{pdf_path}")
-
-
-        header_format = {
-            "backgroundColor": {
-                "red": 0.8,
-                "green": 0.8,
-                "blue": 0.8
-            },
-            "horizontalAlignment": "CENTER",
-            "textFormat": {
-                "bold": True
-            }
-        }
+        messagebox.showinfo("PDF Saved", f"Total BOM PDF saved to:\\n{pdf_path}")
         total_ws.format("A1:Z1", header_format)
-        total_ws.format(f"A{len(total_data) - len(busbar_totals) + 1}:Z{len(total_data) - len(busbar_totals) + 1}", header_format)
-        
-        messagebox.showinfo("BOM Generated", "BOM added to Google Sheets, including 'Total BOM' sheet!")
-    
-    
-        # Append Busbar Materials at the end of Total_BOM
-        if busbar_materials:
-            total_bom.append(["Part No.", "Description"])
-            for item in busbar_materials:
-                total_bom.append(item)
-            # Gray header formatting (only header row)
-            header_row_index = len(total_bom) - len(busbar_materials) - 1
-            # Apply formatting here if using gspread-formatting or similar
-            try:
-                gray_header = CellFormat(
-                    backgroundColor=Color(0.8, 0.8, 0.8),
-                    textFormat=TextFormat(bold=True)
-                )
-                # Apply to first two columns of header row
-                format_cell_range(total_bom_sheet, f"A{header_row_index+1}:B{header_row_index+1}", gray_header)
-            except Exception as fmt_err:
-                print("Formatting failed:", fmt_err)
-
-    
+        messagebox.showinfo("BOM Generated", "BOM added to Google Sheets and grouped PDF created!")
 
     def find_nearest_highest_busbar(self, area_value):
         if self.busbar_data.empty:
             return None
-
-        filtered = self.busbar_data[self.busbar_data['Area (sqmm)'] >= area_value]
+        try:
+            filtered = self.busbar_data[self.busbar_data['Area (sqmm)'] >= area_value]
+        except Exception:
+            return None
         if filtered.empty:
             return None
-        
         match_row = filtered.loc[filtered['Area (sqmm)'].idxmin()]
         return match_row
 
@@ -951,10 +1171,123 @@ class PanelDesigner:
             self.busbars.remove(action["busbar"])
         elif action["type"] == "select_component":
             section = action["section"]
+            # remove current text ids
+            try:
+                for tid in action.get("new_text_ids", []):
+                    self.canvas.delete(tid)
+            except Exception:
+                pass
             section["item"] = action["previous_item"]
-            self.canvas.delete(action["text_id"])
-            self.canvas.itemconfig(action["rect_id"], fill="white" if not action["previous_item"] else "lightgreen")
+            # recolor
+            self.canvas.itemconfig(action["rect_id"], fill=self.palette["section_empty"] if not action["previous_item"] else self.palette["section_selected"])
+            # if previous item existed, redraw its text
+            if action["previous_item"]:
+                section["item"] = {"model": action["previous_item"]["model"], "desc": action["previous_item"].get("desc", ""), "text_ids": []}
+                tids = self.draw_vertical_text_in_section(section, action["previous_item"]["model"], action["previous_item"].get("desc", ""))
+                section["item"]["text_ids"] = tids
         messagebox.showinfo("Undo", "Last action undone.")
+
+    # ================= THEME HELPERS =================
+    def get_palette(self, mode="light"):
+        if mode == "dark":
+            return {
+                "bg": "#1f1f1f",
+                "canvas_bg": "#0f1115",
+                "text": "#e5e7eb",
+                "muted_text": "#9ca3af",
+                "cubicle_fill": "#1f2a44",
+                "cubicle_outline": "#9ca3af",
+                "section_empty": "#111827",
+                "section_selected": "#166534",
+                "section_outline": "#374151",
+                "busbar": "#f59e0b",
+                "busbar_terminal": "#a855f7",
+                "handle": "#ef4444",
+            }
+        else:
+            return {
+                "bg": "#ffffff",
+                "canvas_bg": "lightgray",
+                "text": "#111827",
+                "muted_text": "#374151",
+                "cubicle_fill": "lightblue",
+                "cubicle_outline": "#111827",
+                "section_empty": "#ffffff",
+                "section_selected": "#bbf7d0",
+                "section_outline": "#d1d5db",
+                "busbar": "orange",
+                "busbar_terminal": "purple",
+                "handle": "red",
+            }
+
+    def apply_theme(self):
+        try:
+            self.style.theme_use("clam" if self.is_dark_mode else "default")
+        except Exception:
+            pass
+        try:
+            self.root.configure(bg=self.palette["bg"])
+        except Exception:
+            pass
+        try:
+            self.canvas.configure(bg=self.palette["canvas_bg"])
+        except Exception:
+            pass
+
+        for cub in self.cubicles:
+            try:
+                self.canvas.itemconfig(cub["id"], fill=self.palette["cubicle_fill"], outline=self.palette["cubicle_outline"])
+            except Exception:
+                pass
+            for comp in cub["compartments"]:
+                for sec in comp["sections"]:
+                    try:
+                        fill = self.palette["section_selected"] if sec.get("item") else self.palette["section_empty"]
+                        self.canvas.itemconfig(sec["id"], fill=fill, outline=self.palette["section_outline"])
+                        # recolor text if exists
+                        if sec.get("item") and sec["item"].get("text_ids"):
+                            for tid in sec["item"]["text_ids"]:
+                                self.canvas.itemconfig(tid, fill=self.palette["text"])
+                    except Exception:
+                        pass
+
+        for b in self.busbars:
+            try:
+                color = self.palette["busbar_terminal"] if b.get("busbar_size") else self.palette["busbar"]
+                self.canvas.itemconfig(b["id"], fill=color)
+            except Exception:
+                pass
+
+        try:
+            for h in self.canvas.find_withtag("handle"):
+                self.canvas.itemconfig(h, fill=self.palette["handle"])
+        except Exception:
+            pass
+
+        try:
+            self.add_bottom_right_info()
+        except Exception:
+            pass
+
+    def set_light_mode(self):
+        self.is_dark_mode = False
+        self.palette = self.get_palette("light")
+        self.apply_theme()
+        if hasattr(self, "theme_btn"):
+            self.theme_btn.config(text="🌙 Dark Mode")
+
+    def set_dark_mode(self):
+        self.is_dark_mode = True
+        self.palette = self.get_palette("dark")
+        self.apply_theme()
+        if hasattr(self, "theme_btn"):
+            self.theme_btn.config(text="☀️ Light Mode")
+
+    def toggle_theme(self):
+        if self.is_dark_mode:
+            self.set_light_mode()
+        else:
+            self.set_dark_mode()
 
 
 def get_credentials():
@@ -974,26 +1307,30 @@ def get_credentials():
                 return creds
             except Exception as e:
                 print("Refresh failed, regenerating token.json:", e)
-                os.remove(TOKEN_FILE)
+                try:
+                    os.remove(TOKEN_FILE)
+                except Exception:
+                    pass
 
-        # If creds invalid or no token file, run OAuth flow
         flow = InstalledAppFlow.from_client_secrets_file(CREDENTIALS_FILE, SCOPES)
         creds = flow.run_local_server(port=0)
         with open(TOKEN_FILE, "w") as token:
             token.write(creds.to_json())
-
         return creds
 
     except Exception as e:
-        # Last fallback: regenerate token.json completely
         print("Credential error, regenerating:", e)
-        if os.path.exists(TOKEN_FILE):
-            os.remove(TOKEN_FILE)
+        try:
+            if os.path.exists(TOKEN_FILE):
+                os.remove(TOKEN_FILE)
+        except Exception:
+            pass
         flow = InstalledAppFlow.from_client_secrets_file(CREDENTIALS_FILE, SCOPES)
         creds = flow.run_local_server(port=0)
         with open(TOKEN_FILE, "w") as token:
             token.write(creds.to_json())
         return creds
+
 
 def load_all_projects():
     projects = {}
@@ -1009,7 +1346,7 @@ def load_all_projects():
                         key = (c, p, r)
                         display_name = f"{c} | {p} | {r}"
                         projects[key] = display_name
-            except:
+            except Exception:
                 continue
     return sorted(projects.values()), projects
 
@@ -1018,28 +1355,39 @@ def startup_screen():
     root = tk.Tk()
     root.title("Project Info")
 
-    tk.Label(root, text="Customer:").grid(row=0, column=0, sticky="w", padx=5, pady=5)
+    window_width, window_height = 400, 300
+    screen_width = root.winfo_screenwidth()
+    screen_height = root.winfo_screenheight()
+    x = int((screen_width / 2) - (window_width / 2))
+    y = int((screen_height / 2) - (window_height / 2))
+    root.geometry(f"{window_width}x{window_height}+{x}+{y}")
+    root.resizable(False, False)
+
+    frm = tk.Frame(root, padx=15, pady=15)
+    frm.pack(expand=True)
+
+    tk.Label(frm, text="Customer:").grid(row=0, column=0, sticky="e", pady=5)
     customer_var = tk.StringVar()
-    tk.Entry(root, textvariable=customer_var).grid(row=0, column=1, padx=5, pady=5)
+    tk.Entry(frm, textvariable=customer_var, width=30).grid(row=0, column=1, pady=5)
 
-    tk.Label(root, text="Project:").grid(row=1, column=0, sticky="w", padx=5, pady=5)
+    tk.Label(frm, text="Project:").grid(row=1, column=0, sticky="e", pady=5)
     project_var = tk.StringVar()
-    tk.Entry(root, textvariable=project_var).grid(row=1, column=1, padx=5, pady=5)
+    tk.Entry(frm, textvariable=project_var, width=30).grid(row=1, column=1, pady=5)
 
-    tk.Label(root, text="Our Ref:").grid(row=2, column=0, sticky="w", padx=5, pady=5)
+    tk.Label(frm, text="Our Ref:").grid(row=2, column=0, sticky="e", pady=5)
     ref_var = tk.StringVar()
-    tk.Entry(root, textvariable=ref_var).grid(row=2, column=1, padx=5, pady=5)
+    tk.Entry(frm, textvariable=ref_var, width=30).grid(row=2, column=1, pady=5)
 
     project_names, project_map = load_all_projects()
 
     selected_project_var = tk.StringVar()
-    tk.Label(root, text="Open Existing Project:").grid(row=3, column=0, sticky="w", padx=5, pady=5)
-    project_dropdown = ttk.Combobox(root, textvariable=selected_project_var, values=project_names, state="readonly")
-    project_dropdown.grid(row=3, column=1, padx=5, pady=5)
+    tk.Label(frm, text="Open Existing Project:").grid(row=3, column=0, sticky="e", pady=5)
+    project_dropdown = ttk.Combobox(frm, textvariable=selected_project_var, values=project_names, state="readonly", width=27)
+    project_dropdown.grid(row=3, column=1, pady=5)
 
     action_var = tk.StringVar(value="create")
-    tk.Radiobutton(root, text="Create New Project", variable=action_var, value="create").grid(row=4, column=0, columnspan=2, pady=5)
-    tk.Radiobutton(root, text="Open Existing Project", variable=action_var, value="open").grid(row=5, column=0, columnspan=2, pady=5)
+    tk.Radiobutton(frm, text="Create New Project", variable=action_var, value="create").grid(row=4, column=0, columnspan=2, pady=5)
+    tk.Radiobutton(frm, text="Open Existing Project", variable=action_var, value="open").grid(row=5, column=0, columnspan=2, pady=5)
 
     result = {}
 
@@ -1064,16 +1412,23 @@ def startup_screen():
                     return
             messagebox.showerror("Error", "Please select an existing project.")
 
-    tk.Button(root, text="Confirm", command=on_confirm).grid(row=6, column=0, columnspan=2, pady=10)
+    tk.Button(frm, text="Confirm", command=on_confirm, width=20).grid(row=6, column=0, columnspan=2, pady=15)
 
     root.protocol("WM_DELETE_WINDOW", lambda: exit(0))
+    root.after(100, lambda: root.focus_force())
     root.mainloop()
-
     return result
 
 
 if __name__ == "__main__":
     project_info = startup_screen()
     root = tk.Tk()
+    window_width, window_height = 1200, 700
+    screen_width = root.winfo_screenwidth()
+    screen_height = root.winfo_screenheight()
+    x = int((screen_width / 2) - (window_width / 2))
+    y = int((screen_height / 2) - (window_height / 2))
+    root.geometry(f"{window_width}x{window_height}+{x}+{y}")
+    root.minsize(1000, 600)
     app = PanelDesigner(root, project_info["customer"], project_info["project"], project_info["ref"])
     root.mainloop()
