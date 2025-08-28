@@ -1,5 +1,4 @@
-
-__version__ = "2025.08.28"
+__version__ = "2025.08.28b"
 
 import tkinter as tk
 from tkinter import simpledialog, filedialog, messagebox, ttk
@@ -22,6 +21,40 @@ from google.auth.transport.requests import Request
 from PIL import Image, ImageTk
 from collections import defaultdict
 
+
+# ====== Persisted Version Helpers (Injected) ======
+import os, sys, time, shutil, requests
+
+APPDATA_FOLDER = os.path.join(os.environ.get("APPDATA") or os.path.expanduser("~"), "PanelDesigner")
+os.makedirs(APPDATA_FOLDER, exist_ok=True)
+VERSION_FILE = os.path.join(APPDATA_FOLDER, "version.txt")
+
+def get_installed_version():
+    try:
+        with open(VERSION_FILE, "r", encoding="utf-8") as f:
+            return f.read().strip() or "0"
+    except Exception:
+        return "0"
+
+def set_installed_version(v):
+    try:
+        with open(VERSION_FILE, "w", encoding="utf-8") as f:
+            f.write(str(v))
+    except Exception:
+        pass
+
+def fetch_remote_version():
+    try:
+        url = "https://raw.githubusercontent.com/hsspcreations/panel-designer-updates/refs/heads/main/version.txt"
+        r = requests.get(url, timeout=6)
+        if r.status_code == 200:
+            return r.text.strip()
+    except Exception:
+        return None
+    return None
+# ====== End Injected Helpers ======
+
+
 BREAKER_FILE = "breaker_types.json"
 APPDATA_FOLDER = os.path.join(os.environ.get("APPDATA") or os.path.expanduser("~"), "PanelDesigner")
 PANELS_FOLDER = os.path.join(APPDATA_FOLDER, "panels")
@@ -30,6 +63,21 @@ TOKEN_FILE = os.path.join(APPDATA_FOLDER, "token.json")
 
 
 def update_software():
+    remote_ver = fetch_remote_version()
+    if not remote_ver:
+        try:
+            from tkinter import messagebox
+            messagebox.showerror("Update", "Could not fetch remote version.")
+        except Exception: pass
+        return
+    current_ver = get_installed_version()
+    if str(remote_ver) <= str(current_ver):
+        try:
+            from tkinter import messagebox
+            messagebox.showinfo("Update", "Already up to date.")
+        except Exception: pass
+        return
+
     import time
     messagebox.showinfo("Updater", f"Current version: {__version__}\\nDownloading latest version...")
     UPDATE_URL = "https://raw.githubusercontent.com/hsspcreations/panel-designer-updates/refs/heads/main/main.py"
