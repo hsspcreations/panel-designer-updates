@@ -1,4 +1,4 @@
-__version__ = "2025.08.28b"
+__version__ = "2025.08.30"
 
 import tkinter as tk
 from tkinter import simpledialog, filedialog, messagebox, ttk
@@ -79,7 +79,7 @@ def update_software():
         return
 
     import time
-    messagebox.showinfo("Updater", f"Current version: {__version__}\\nDownloading latest version...")
+    messagebox.showinfo("Updater", f"Current version: {__version__}\nDownloading latest version...")
     UPDATE_URL = "https://raw.githubusercontent.com/hsspcreations/panel-designer-updates/refs/heads/main/main.py"
     try:
         url = f"{UPDATE_URL}?t={int(time.time())}"  # bypass cache
@@ -185,16 +185,26 @@ class PanelDesigner:
 
         tk.Button(top_frame, text="Create Panel", command=self.create_panel).pack(side=tk.LEFT, padx=5)
         tk.Button(top_frame, text="Add Cubicle", command=self.add_cubicle).pack(side=tk.LEFT, padx=5)
-        tk.Button(top_frame, text="Add Vertical Busbar", command=self.add_vertical_busbar_form).pack(side=tk.LEFT, padx=5)
-        tk.Button(top_frame, text="Add Horizontal Busbar", command=self.add_horizontal_busbar_form).pack(side=tk.LEFT, padx=5)
-        tk.Button(top_frame, text="Add Busbar Terminal", command=self.add_busbar_terminal_form).pack(side=tk.LEFT, padx=5)
+
+        # === NEW: Single dropdown for the three busbar actions ===
+        busbar_mb = tk.Menubutton(top_frame, text="➕ Busbar", relief=tk.RAISED, borderwidth=1)
+        busbar_menu = tk.Menu(busbar_mb, tearoff=False)
+        busbar_menu.add_command(label="Add Vertical Busbar", command=self.add_vertical_busbar_form)
+        busbar_menu.add_command(label="Add Horizontal Busbar", command=self.add_horizontal_busbar_form)
+        busbar_menu.add_command(label="Add Busbar Terminal", command=self.add_busbar_terminal_form)
+        busbar_mb.configure(menu=busbar_menu)
+        busbar_mb.pack(side=tk.LEFT, padx=5)
+
         tk.Button(top_frame, text="Upload Breaker Types", command=self.load_breaker_excel).pack(side=tk.LEFT, padx=5)
         tk.Button(top_frame, text="Save Panel", command=self.save_panel).pack(side=tk.LEFT, padx=5)
         tk.Button(top_frame, text="Generate BOM", command=self.generate_bom).pack(side=tk.LEFT, padx=5)
         tk.Button(top_frame, text="Undo", command=self.undo_last_action).pack(side=tk.LEFT, padx=5)
         tk.Button(top_frame, text="Update Software", command=update_software).pack(side=tk.LEFT, padx=5)
-        self.theme_btn = ttk.Button(top_frame, text="🌙 Dark Mode", command=self.toggle_theme)
-        self.theme_btn.pack(side=tk.RIGHT, padx=5)
+
+        # === NEW: Dark/Light mode toggle as a Checkbutton ===
+        self.dark_mode_var = tk.BooleanVar(value=False)
+        self.dark_toggle = ttk.Checkbutton(top_frame, text="Dark Mode", variable=self.dark_mode_var, command=self.toggle_theme_check)
+        self.dark_toggle.pack(side=tk.RIGHT, padx=5)
 
         canvas_frame = tk.Frame(root)
         canvas_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
@@ -503,7 +513,7 @@ class PanelDesigner:
 
         text_ids = []
         for idx, chunk in enumerate(draw_columns):
-            col_text = "\\n".join(list(chunk))
+            col_text = "\n".join(list(chunk))
             tx = start_x + idx * (char_w + col_gap)
             tid = self.canvas.create_text(tx, center_y, text=col_text, font=fnt, fill=self.palette["text"], anchor="center", justify="center")
             self.canvas.tag_bind(tid, "<Enter>", lambda e, d=desc: self.show_tooltip(e, d))
@@ -1186,7 +1196,7 @@ class PanelDesigner:
         except Exception as e:
             print("Could not open PDF automatically:", e)
 
-        messagebox.showinfo("PDF Saved", f"Total BOM PDF saved to:\\n{pdf_path}")
+        messagebox.showinfo("PDF Saved", f"Total BOM PDF saved to:\n{pdf_path}")
         total_ws.format("A1:Z1", header_format)
         messagebox.showinfo("BOM Generated", "BOM added to Google Sheets and grouped PDF created!")
 
@@ -1317,25 +1327,35 @@ class PanelDesigner:
         except Exception:
             pass
 
+        # sync toggle label to current mode
+        try:
+            self.dark_mode_var.set(self.is_dark_mode)
+            self.dark_toggle.config(text="Dark Mode" if not self.is_dark_mode else "Light Mode")
+        except Exception:
+            pass
+
     def set_light_mode(self):
         self.is_dark_mode = False
         self.palette = self.get_palette("light")
         self.apply_theme()
-        if hasattr(self, "theme_btn"):
-            self.theme_btn.config(text="🌙 Dark Mode")
 
     def set_dark_mode(self):
         self.is_dark_mode = True
         self.palette = self.get_palette("dark")
         self.apply_theme()
-        if hasattr(self, "theme_btn"):
-            self.theme_btn.config(text="☀️ Light Mode")
 
     def toggle_theme(self):
         if self.is_dark_mode:
             self.set_light_mode()
         else:
             self.set_dark_mode()
+
+    def toggle_theme_check(self):
+        # Called by the Checkbutton
+        if self.dark_mode_var.get():
+            self.set_dark_mode()
+        else:
+            self.set_light_mode()
 
 
 def get_credentials():
@@ -1480,4 +1500,3 @@ if __name__ == "__main__":
     root.minsize(1000, 600)
     app = PanelDesigner(root, project_info["customer"], project_info["project"], project_info["ref"])
     root.mainloop()
-
