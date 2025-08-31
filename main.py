@@ -1,4 +1,4 @@
-__version__ = "2025.08.30"
+__version__ = "2025.08.31"
 
 import tkinter as tk
 from tkinter import simpledialog, filedialog, messagebox, ttk
@@ -1421,69 +1421,106 @@ def load_all_projects():
 
 def startup_screen():
     root = tk.Tk()
-    root.title("Project Info")
-
-    window_width, window_height = 400, 300
-    screen_width = root.winfo_screenwidth()
-    screen_height = root.winfo_screenheight()
-    x = int((screen_width / 2) - (window_width / 2))
-    y = int((screen_height / 2) - (window_height / 2))
-    root.geometry(f"{window_width}x{window_height}+{x}+{y}")
+    root.title("Welcome")
+    root.configure(bg="#faebd7")
+    root.geometry("500x400")
     root.resizable(False, False)
-
-    frm = tk.Frame(root, padx=15, pady=15)
-    frm.pack(expand=True)
-
-    tk.Label(frm, text="Customer:").grid(row=0, column=0, sticky="e", pady=5)
-    customer_var = tk.StringVar()
-    tk.Entry(frm, textvariable=customer_var, width=30).grid(row=0, column=1, pady=5)
-
-    tk.Label(frm, text="Project:").grid(row=1, column=0, sticky="e", pady=5)
-    project_var = tk.StringVar()
-    tk.Entry(frm, textvariable=project_var, width=30).grid(row=1, column=1, pady=5)
-
-    tk.Label(frm, text="Our Ref:").grid(row=2, column=0, sticky="e", pady=5)
-    ref_var = tk.StringVar()
-    tk.Entry(frm, textvariable=ref_var, width=30).grid(row=2, column=1, pady=5)
-
-    project_names, project_map = load_all_projects()
-
-    selected_project_var = tk.StringVar()
-    tk.Label(frm, text="Open Existing Project:").grid(row=3, column=0, sticky="e", pady=5)
-    project_dropdown = ttk.Combobox(frm, textvariable=selected_project_var, values=project_names, state="readonly", width=27)
-    project_dropdown.grid(row=3, column=1, pady=5)
-
-    action_var = tk.StringVar(value="create")
-    tk.Radiobutton(frm, text="Create New Project", variable=action_var, value="create").grid(row=4, column=0, columnspan=2, pady=5)
-    tk.Radiobutton(frm, text="Open Existing Project", variable=action_var, value="open").grid(row=5, column=0, columnspan=2, pady=5)
 
     result = {}
 
-    def on_confirm():
-        if action_var.get() == "create":
-            if not customer_var.get().strip() or not project_var.get().strip() or not ref_var.get().strip():
-                messagebox.showerror("Error", "Please fill all fields.")
+    # --- Frame ---
+    frm = tk.Frame(root, bg="#faebd7")
+    frm.pack(expand=True, fill="both")
+
+    # --- Logo ---
+    try:
+        logo = tk.PhotoImage(file=resource_path("VLPP.ico"))
+        logo_label = tk.Label(frm, image=logo, bg="#faebd7")
+        logo_label.image = logo
+        logo_label.pack(pady=10)
+    except Exception:
+        pass
+
+    tk.Label(frm, text="WELCOME", font=("Arial", 16, "bold"), bg="#faebd7").pack()
+    tk.Label(frm, text="PANEL DESIGNER", font=("Arial", 12), bg="#faebd7").pack(pady=5)
+
+    # --- Button Actions ---
+    def show_create_new():
+        frm.pack_forget()
+        create_frame()
+
+    def show_open_file():
+        frm.pack_forget()
+        open_frame()
+
+    tk.Button(frm, text="CREATE NEW", width=20, command=show_create_new).pack(pady=10)
+    tk.Button(frm, text="OPEN FILE", width=20, command=show_open_file).pack(pady=5)
+
+    # --- Footer ---
+    footer = tk.Frame(root, bg="#faebd7")
+    footer.pack(side="bottom", anchor="se", padx=10, pady=5)
+    tk.Label(footer, text="venora@gmail.com", bg="#faebd7", font=("Arial", 9)).pack(anchor="e")
+    tk.Label(footer, text="0764319139", bg="#faebd7", font=("Arial", 9)).pack(anchor="e")
+
+    # --- Create New Frame ---
+    def create_frame():
+        newf = tk.Frame(root, bg="#faebd7")
+        newf.pack(expand=True)
+
+        tk.Label(newf, text="PANEL DESIGNER", font=("Arial", 14, "bold"), bg="#faebd7").grid(row=0, column=0, columnspan=2, pady=10)
+
+        tk.Label(newf, text="Project Name:", bg="#faebd7").grid(row=1, column=0, sticky="e", pady=5, padx=5)
+        proj_var = tk.StringVar()
+        tk.Entry(newf, textvariable=proj_var).grid(row=1, column=1, pady=5)
+
+        tk.Label(newf, text="Customer Name:", bg="#faebd7").grid(row=2, column=0, sticky="e", pady=5, padx=5)
+        cust_var = tk.StringVar()
+        tk.Entry(newf, textvariable=cust_var).grid(row=2, column=1, pady=5)
+
+        tk.Label(newf, text="Our Reference:", bg="#faebd7").grid(row=3, column=0, sticky="e", pady=5, padx=5)
+        ref_var = tk.StringVar()
+        tk.Entry(newf, textvariable=ref_var).grid(row=3, column=1, pady=5)
+
+        def create_action():
+            if not proj_var.get().strip() or not cust_var.get().strip() or not ref_var.get().strip():
+                messagebox.showerror("Error", "Fill all fields")
                 return
-            result["customer"] = customer_var.get().strip()
-            result["project"] = project_var.get().strip()
+            result["project"] = proj_var.get().strip()
+            result["customer"] = cust_var.get().strip()
             result["ref"] = ref_var.get().strip()
             root.destroy()
-        else:
-            selected = selected_project_var.get()
-            for key, display_name in project_map.items():
-                if display_name == selected:
+
+        tk.Button(newf, text="CREATE", command=create_action).grid(row=4, column=0, pady=15)
+        tk.Button(newf, text="BACK", command=lambda:[newf.destroy(), frm.pack(expand=True)]).grid(row=4, column=1)
+
+    # --- Open File Frame ---
+    def open_frame():
+        of = tk.Frame(root, bg="#faebd7")
+        of.pack(expand=True)
+
+        tk.Label(of, text="Open Project", font=("Arial", 14, "bold"), bg="#faebd7").pack(pady=10)
+
+        project_names, project_map = load_all_projects()
+        selected_var = tk.StringVar()
+        combo = ttk.Combobox(of, textvariable=selected_var, values=project_names, state="readonly", width=40)
+        combo.pack(pady=10)
+
+        def open_action():
+            sel = selected_var.get()
+            for key, name in project_map.items():
+                if name == sel:
                     c, p, r = key
                     result["customer"] = c
                     result["project"] = p
                     result["ref"] = r
                     root.destroy()
                     return
-            messagebox.showerror("Error", "Please select an existing project.")
+            messagebox.showerror("Error", "Select a project")
 
-    tk.Button(frm, text="Confirm", command=on_confirm, width=20).grid(row=6, column=0, columnspan=2, pady=15)
+        tk.Button(of, text="OPEN", command=open_action).pack(pady=10)
+        tk.Button(of, text="BACK", command=lambda:[of.destroy(), frm.pack(expand=True)]).pack()
 
     root.protocol("WM_DELETE_WINDOW", lambda: exit(0))
-    root.after(100, lambda: root.focus_force())
     root.mainloop()
     return result
 
