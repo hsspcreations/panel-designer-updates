@@ -1,4 +1,4 @@
-__version__ = "2025.09.01a"
+__version__ = "2025.09.05"
 
 import tkinter as tk
 from tkinter import simpledialog, filedialog, messagebox, ttk
@@ -1028,11 +1028,26 @@ class PanelDesigner:
                             no_of_runs = 1
 
                         length = (coords[2] - coords[0]) if busbar.get("type") == "horizontal" else (coords[3] - coords[1])
+                        extra_qty = 0
+                        if self.panel_depth and self.panel_depth > 400:
+                            extra_qty = (self.panel_depth - 400) * no_of_runs
 
                         if busbar_size_str:
-                            bus_part_no = busbar_size_str
-                            bus_desc = busbar_size_str
-                            qty = max(0, int(length)) * no_of_runs
+                            # lookup in busbar_data from CSV
+                            match = self.busbar_data[self.busbar_data["Item description"].str.contains(busbar_size_str, case=False, na=False, regex=False)]
+                            if not match.empty:
+                                bus_part_no = str(match.iloc[0]["Part no"])
+                                bus_desc = str(match.iloc[0]["Item description"])
+                            else:
+                                bus_part_no = busbar_size_str  # fallback
+                                bus_desc = busbar_size_str
+
+                            if phase.lower().startswith("single"):
+                                phase_multiplier = 2
+                            else:
+                                phase_multiplier = 4
+
+                            qty = (max(0, int(length)) + (self.panel_depth - 400)) * no_of_runs * phase_multiplier
                             busbar_totals[bus_part_no]["desc"] = bus_desc
                             busbar_totals[bus_part_no]["total"] += qty
                             busbar_totals[bus_part_no]["panels"][pname] += qty
@@ -1053,7 +1068,8 @@ class PanelDesigner:
                                 base_qty = max(0, int(length)) * bus_runs
                                 multiplier = 2 if phase == "Single Phase" else 4
                                 qty = base_qty * multiplier
-
+                                qty += extra_qty
+                            
                             busbar_totals[bus_part_no]["desc"] = bus_desc
                             busbar_totals[bus_part_no]["total"] += qty
                             busbar_totals[bus_part_no]["panels"][pname] += qty
@@ -1537,4 +1553,3 @@ if __name__ == "__main__":
     root.minsize(1000, 600)
     app = PanelDesigner(root, project_info["customer"], project_info["project"], project_info["ref"])
     root.mainloop()
-
