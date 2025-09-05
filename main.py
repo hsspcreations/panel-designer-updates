@@ -1,4 +1,4 @@
-__version__ = "2025.09.05a"
+__version__ = "2025.09.06"
 
 import tkinter as tk
 from tkinter import simpledialog, filedialog, messagebox, ttk
@@ -1553,4 +1553,5 @@ if __name__ == "__main__":
     root.minsize(1000, 600)
     app = PanelDesigner(root, project_info["customer"], project_info["project"], project_info["ref"])
     root.mainloop()
+
 
